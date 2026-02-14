@@ -315,12 +315,13 @@ export const GuardianController = {
         }
     },
 
-    // Get all dependents (existing)
+    // Get all recipients (enriched with practitioners and care plans)
     async getPatients(req: Request, res: Response) {
         try {
             const guardianPersonId = req.user?.fhirResourceId;
             if (!guardianPersonId) return res.status(400).json({ error: "User not linked to a Person resource" });
 
+            // 1. Get Linked Patients via RelatedPerson
             const response = await aidboxClient.get('/RelatedPerson', {
                 params: {
                     identifier: `https://hcbs-platform.com/guardian-person-id|${guardianPersonId}`,
@@ -333,11 +334,50 @@ export const GuardianController = {
                 .filter((e: { resource: Record<string, unknown> }) => e.resource.resourceType === 'Patient')
                 .map((e: { resource: Record<string, unknown> }) => e.resource);
 
-            res.json(patients);
+            // 2. Fetch details for each patient (Practitioners & CarePlans)
+            const enrichedPatients = await Promise.all(patients.map(async (patient: any) => {
+                // A. Fetch CareTeam to find Practitioners
+                const careTeamRes = await aidboxClient.get('/CareTeam', {
+                    params: { subject: `Patient/${patient.id}`, status: 'active' }
+                });
+                const careTeams = (careTeamRes.data.entry || []).map((e: any) => e.resource);
+
+                const practitioners: any[] = [];
+                careTeams.forEach((ct: any) => {
+                    ct.participant?.forEach((p: any) => {
+                        if (p.member?.reference?.startsWith('Practitioner/')) {
+                            practitioners.push({
+                                id: p.member.reference.split('/')[1],
+                                name: p.member.display || 'Unknown Practitioner',
+                                role: p.role?.[0]?.coding?.[0]?.display || 'Member'
+                            });
+                        }
+                    });
+                });
+
+                // B. Fetch CarePlans
+                const carePlanRes = await aidboxClient.get('/CarePlan', {
+                    params: { subject: `Patient/${patient.id}`, status: 'active' }
+                });
+                const carePlans = (carePlanRes.data.entry || []).map((e: any) => ({
+                    id: e.resource.id,
+                    title: e.resource.title || 'Untitled Care Plan',
+                    status: e.resource.status,
+                    description: e.resource.description
+                }));
+
+                return {
+                    ...patient,
+                    practitioners, // Array of { id, name, role }
+                    carePlans      // Array of { id, title, status, description }
+                };
+            }));
+
+            res.json(enrichedPatients);
         } catch (error: unknown) {
             const msg = error instanceof Error ? error.message : 'Unknown error';
-            console.error("Get Guardian Patients Error:", msg);
-            res.status(500).json({ error: "Failed to fetch patients" });
+            console.error("Get Guardian Recipients Error:", msg);
+            res.status(500).json({ error: "Failed to fetch recipients" });
         }
     }
 };

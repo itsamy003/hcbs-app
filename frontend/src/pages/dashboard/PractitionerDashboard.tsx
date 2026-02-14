@@ -1,13 +1,43 @@
 import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import api from '../../lib/api';
-import { format } from 'date-fns';
+import DatePicker from 'react-datepicker';
+import "react-datepicker/dist/react-datepicker.css";
+import { Calendar, dateFnsLocalizer, Views } from 'react-big-calendar';
+import "react-big-calendar/lib/css/react-big-calendar.css";
+import { format, parse, startOfWeek, getDay } from 'date-fns';
+import { enUS } from 'date-fns/locale/en-US';
+import { Calendar as CalendarIcon, Clock } from 'lucide-react';
+
+const locales = {
+    'en-US': enUS,
+};
+
+const localizer = dateFnsLocalizer({
+    format,
+    parse,
+    startOfWeek,
+    getDay,
+    locales,
+});
+
+interface Appointment {
+    id: string;
+    start: string;
+    end?: string;
+    status: 'booked' | 'available';
+    patientName?: string;
+}
 
 export default function PractitionerDashboard() {
-    const [availability, setAvailability] = useState({ start: '', end: '', duration: 30 });
+    // Availability State
+    const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
+    const [startTime, setStartTime] = useState<Date | null>(new Date(new Date().setHours(9, 0)));
+    const [endTime, setEndTime] = useState<Date | null>(new Date(new Date().setHours(17, 0)));
+    const [duration, setDuration] = useState(30);
 
     // Fetch Appointments
-    const { data: appointments, isLoading } = useQuery({
+    const { data: appointments, refetch: refetchAppointments } = useQuery<Appointment[]>({
         queryKey: ['appointments'],
         queryFn: async () => {
             const res = await api.get('/appointments');
@@ -15,106 +45,168 @@ export default function PractitionerDashboard() {
         }
     });
 
+    // Map appointments to BigCalendar format
+    const events = appointments?.map(apt => ({
+        title: `${apt.status === 'booked' ? 'Booked' : 'Available'} - ${apt.patientName || 'Open'}`,
+        start: new Date(apt.start),
+        end: new Date(apt.end || new Date(new Date(apt.start).getTime() + 30 * 60000)), // Default 30m if no end
+        resource: apt
+    })) || [];
+
     // Post Availability
     const mutation = useMutation({
-        mutationFn: async (data: any) => {
+        mutationFn: async () => {
+            if (!selectedDate || !startTime || !endTime) return;
+
+            // Construct start/end Date strings
+            const startDateTime = new Date(selectedDate);
+            startDateTime.setHours(startTime.getHours(), startTime.getMinutes());
+
+            const endDateTime = new Date(selectedDate);
+            endDateTime.setHours(endTime.getHours(), endTime.getMinutes());
+
             return api.post('/practitioner/availability', {
-                start: new Date(data.start).toISOString(),
-                end: new Date(data.end).toISOString(),
-                durationMinutes: parseInt(data.duration)
+                start: format(startDateTime, "yyyy-MM-dd'T'HH:mm:ss"),
+                end: format(endDateTime, "yyyy-MM-dd'T'HH:mm:ss"),
+                durationMinutes: duration
             });
         },
         onSuccess: () => {
-            alert("Availability Posted!");
-            setAvailability({ start: '', end: '', duration: 30 });
+            alert("Availability Successfully Published!");
+            refetchAppointments();
+        },
+        onError: (err: unknown) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const error = err as any;
+            alert("Failed to publish availability: " + (error.response?.data?.error || error.message));
         }
     });
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        mutation.mutate(availability);
-    };
-
     return (
-        <div className="space-y-6">
-            <h2 className="text-2xl font-bold text-gray-900">Practitioner Dashboard</h2>
-
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                {/* Availability Form */}
-                <div className="rounded-lg bg-white p-6 shadow">
-                    <h3 className="mb-4 text-lg font-medium">Post Availability</h3>
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Start Time</label>
-                            <input
-                                type="datetime-local"
-                                required
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
-                                value={availability.start}
-                                onChange={e => setAvailability({ ...availability, start: e.target.value })}
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">End Time</label>
-                            <input
-                                type="datetime-local"
-                                required
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
-                                value={availability.end}
-                                onChange={e => setAvailability({ ...availability, end: e.target.value })}
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Slot Duration (minutes)</label>
-                            <input
-                                type="number"
-                                required
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2"
-                                value={availability.duration}
-                                onChange={e => setAvailability({ ...availability, duration: parseInt(e.target.value) || 30 })}
-                            />
-                        </div>
-                        <button
-                            type="submit"
-                            disabled={mutation.isPending}
-                            className="w-full rounded-md bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-50"
-                        >
-                            {mutation.isPending ? 'Posting...' : 'Post Schedule'}
-                        </button>
-                    </form>
-                </div>
-
-                {/* Appointments List */}
-                <div className="rounded-lg bg-white p-6 shadow">
-                    <h3 className="mb-4 text-lg font-medium">Upcoming Appointments</h3>
-                    {isLoading ? <p>Loading...</p> : (
-                        <ul className="divide-y divide-gray-200">
-                            {appointments?.length === 0 && <p className="text-gray-500">No appointments found.</p>}
-                            {appointments?.map((apt: any) => (
-                                <li key={apt.id} className="py-4">
-                                    <div className="flex justify-between">
-                                        <div>
-                                            <p className="font-medium text-gray-900">{format(new Date(apt.start), 'PPpp')}</p>
-                                            <p className="text-sm text-gray-500">Duration: 30 mins</p>
-                                        </div>
-                                        <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
-                                            {apt.status}
-                                        </span>
-                                    </div>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
+        <div className="space-y-8 max-w-7xl mx-auto pb-12">
+            <div className="flex justify-between items-center">
+                <div>
+                    <h2 className="text-3xl font-extrabold text-gray-900 tracking-tight">Practitioner Workspace</h2>
+                    <p className="mt-2 text-gray-500">Manage your schedule and patient care team</p>
                 </div>
             </div>
 
-            {/* Patient Management Section */}
-            <div className="rounded-lg bg-white p-6 shadow">
-                <h3 className="mb-4 text-lg font-medium">Patient Management</h3>
-                <PatientManagement />
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* 1. Define Availability (Left Column) */}
+                <section className="lg:col-span-1">
+                    <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 space-y-6">
+                        <div className="flex items-center space-x-3 mb-2">
+                            <div className="p-2 bg-indigo-50 rounded-lg">
+                                <CalendarIcon className="h-6 w-6 text-indigo-600" />
+                            </div>
+                            <div>
+                                <h3 className="text-xl font-bold text-gray-900">Working Hours</h3>
+                                <p className="text-sm text-gray-500">Set your daily slots</p>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-1">Select Date</label>
+                                <DatePicker
+                                    selected={selectedDate}
+                                    onChange={(date) => setSelectedDate(date)}
+                                    className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 bg-gray-50"
+                                    dateFormat="MMMM d, yyyy"
+                                    minDate={new Date()}
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-1">Start Time</label>
+                                    <DatePicker
+                                        selected={startTime}
+                                        onChange={(date) => setStartTime(date)}
+                                        showTimeSelect
+                                        showTimeSelectOnly
+                                        timeIntervals={30}
+                                        timeCaption="Time"
+                                        dateFormat="h:mm aa"
+                                        className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 bg-gray-50"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-1">End Time</label>
+                                    <DatePicker
+                                        selected={endTime}
+                                        onChange={(date) => setEndTime(date)}
+                                        showTimeSelect
+                                        showTimeSelectOnly
+                                        timeIntervals={30}
+                                        timeCaption="Time"
+                                        dateFormat="h:mm aa"
+                                        className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 bg-gray-50"
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-1">Slot Duration</label>
+                                <div className="relative">
+                                    <Clock className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                                    <select
+                                        value={duration}
+                                        onChange={(e) => setDuration(Number(e.target.value))}
+                                        className="w-full pl-10 pr-4 py-2 bg-gray-50 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+                                    >
+                                        <option value={15}>15 Minutes</option>
+                                        <option value={30}>30 Minutes</option>
+                                        <option value={60}>1 Hour</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <button
+                                onClick={() => mutation.mutate()}
+                                disabled={mutation.isPending}
+                                className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all disabled:opacity-50"
+                            >
+                                {mutation.isPending ? 'Publishing...' : 'Publish Availability'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Patient Section below Availability on small screens, or kept here */}
+                    <div className="mt-8 bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
+                        <h3 className="mb-4 text-xl font-bold text-gray-900">Patient Directory</h3>
+                        <PatientManagement />
+                    </div>
+                </section>
+
+                {/* 2. Calendar View (Right Column, spans 2) */}
+                <section className="lg:col-span-2 min-h-[600px] bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
+                    <h3 className="text-xl font-bold text-gray-900 mb-4">Your Weekly Schedule</h3>
+                    <div className="h-[600px]">
+                        <Calendar
+                            localizer={localizer}
+                            events={events}
+                            startAccessor="start"
+                            endAccessor="end"
+                            style={{ height: '100%' }}
+                            defaultView={Views.WEEK}
+                            views={['week', 'day', 'agenda']}
+                            step={30}
+                            timeslots={2}
+                        />
+                    </div>
+                </section>
             </div>
         </div>
     );
+}
+
+interface Patient {
+    id: string;
+    name: {
+        given: string[];
+        family: string;
+    }[];
 }
 
 function PatientManagement() {
@@ -123,7 +215,7 @@ function PatientManagement() {
     const [carePlanDesc, setCarePlanDesc] = useState('');
 
     // Fetch Patients
-    const { data: patients, isLoading } = useQuery({
+    const { data: patients, isLoading } = useQuery<Patient[]>({
         queryKey: ['practitioner-patients'],
         queryFn: async () => {
             const res = await api.get('/practitioner/patients');
@@ -149,57 +241,41 @@ function PatientManagement() {
         }
     });
 
-    if (isLoading) return <p>Loading patients...</p>;
+    if (isLoading) return <p className="text-gray-500 text-sm">Loading patients...</p>;
 
     return (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* List of Patients */}
+        <div className="space-y-4">
+            {/* Simple List for Sidebar */}
             <div>
-                <h4 className="font-semibold mb-2">My Patients</h4>
-                {patients?.length === 0 && <p className="text-gray-500">No patients assigned (or you are not in their Care Team).</p>}
-                <ul className="border rounded divide-y max-h-60 overflow-y-auto">
-                    {patients?.map((p: any) => (
+                {patients?.length === 0 && <p className="text-gray-500 text-sm">No patients assigned.</p>}
+                <ul className="divide-y max-h-60 overflow-y-auto border rounded-lg">
+                    {patients?.map((p) => (
                         <li
                             key={p.id}
-                            className={`p-3 cursor-pointer hover:bg-gray-50 ${selectedPatientId === p.id ? 'bg-indigo-50 border-l-4 border-indigo-500' : ''}`}
+                            className={`p-3 cursor-pointer hover:bg-gray-50 text-sm ${selectedPatientId === p.id ? 'bg-indigo-50 border-l-4 border-indigo-500' : ''}`}
                             onClick={() => setSelectedPatientId(p.id)}
                         >
                             <p className="font-medium">{p.name?.[0]?.given?.join(' ')} {p.name?.[0]?.family}</p>
-                            <p className="text-xs text-gray-500">ID: {p.id}</p>
                         </li>
                     ))}
                 </ul>
             </div>
 
             {/* Actions for Selected Patient */}
-            <div className="border rounded p-4 bg-gray-50">
-                {selectedPatientId ? (
-                    <>
-                        <h4 className="font-semibold mb-4">Create Care Plan</h4>
-                        <div className="space-y-3">
-                            <div>
-                                <label className="block text-sm font-medium">Title</label>
-                                <input className="w-full border rounded p-2" value={carePlanTitle} onChange={e => setCarePlanTitle(e.target.value)} placeholder="e.g. Daily Rehab" />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium">Description</label>
-                                <textarea className="w-full border rounded p-2" value={carePlanDesc} onChange={e => setCarePlanDesc(e.target.value)} placeholder="Details..." />
-                            </div>
-                            <button
-                                onClick={() => createCarePlanMutation.mutate()}
-                                disabled={createCarePlanMutation.isPending}
-                                className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 w-full"
-                            >
-                                {createCarePlanMutation.isPending ? 'Creating...' : 'Create Care Plan'}
-                            </button>
-                        </div>
-                    </>
-                ) : (
-                    <div className="h-full flex items-center justify-center text-gray-500">
-                        Select a patient to View/Manage
-                    </div>
-                )}
-            </div>
+            {selectedPatientId && (
+                <div className="space-y-3 pt-4 border-t">
+                    <h4 className="font-semibold text-sm">Add Care Plan</h4>
+                    <input className="w-full text-sm border rounded p-2" value={carePlanTitle} onChange={e => setCarePlanTitle(e.target.value)} placeholder="Title" />
+                    <textarea className="w-full text-sm border rounded p-2" value={carePlanDesc} onChange={e => setCarePlanDesc(e.target.value)} placeholder="Details..." rows={2} />
+                    <button
+                        onClick={() => createCarePlanMutation.mutate()}
+                        disabled={createCarePlanMutation.isPending}
+                        className="bg-green-600 text-white text-sm px-4 py-2 rounded hover:bg-green-700 w-full"
+                    >
+                        {createCarePlanMutation.isPending ? 'Creating...' : 'Create Care Plan'}
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
