@@ -116,7 +116,17 @@ export const GuardianController = {
             if (name) params.name = name as string;
 
             const response = await aidboxClient.get('/Practitioner', { params });
-            const practitioners = (response.data.entry || []).map((e: { resource: Record<string, unknown> }) => e.resource);
+            const practitioners = (response.data.entry || []).map((e: { resource: any }) => {
+                const p = e.resource;
+                const name = p.name?.[0]
+                    ? `${p.name[0].given?.join(' ') || ''} ${p.name[0].family || ''}`.trim()
+                    : 'Unknown Practitioner';
+                return {
+                    id: p.id,
+                    name,
+                    role: 'Practitioner' // Default role as we're just searching resources
+                };
+            });
             res.json(practitioners);
         } catch (error: unknown) {
             const msg = error instanceof Error ? error.message : 'Unknown error';
@@ -201,27 +211,38 @@ export const GuardianController = {
     async getAvailableSlots(req: Request, res: Response) {
         try {
             const { practitionerId } = req.query;
+            console.log(`[Slots] Fetching slots for practitioner: ${practitionerId}`);
             if (!practitionerId) return res.status(400).json({ error: "practitionerId required" });
 
             // Find schedules for this practitioner
             const scheduleRes = await aidboxClient.get('/Schedule', {
                 params: { actor: `Practitioner/${practitionerId}` }
             });
+            console.log(`[Slots] Schedule response status: ${scheduleRes.status}, count: ${scheduleRes.data.entry?.length}`);
+
             const schedules = (scheduleRes.data.entry || []).map((e: { resource: Record<string, unknown> }) => e.resource);
-            if (schedules.length === 0) return res.json([]);
+            if (schedules.length === 0) {
+                console.log("[Slots] No schedules found");
+                return res.json([]);
+            }
 
             // Find free slots for all schedules
             const scheduleRefs = schedules.map((s: Record<string, unknown>) => `Schedule/${s.id}`);
+            console.log(`[Slots] Searching slots for schedules: ${scheduleRefs.join(',')}`);
             const slotRes = await aidboxClient.get('/Slot', {
                 params: {
                     schedule: scheduleRefs.join(','),
                     status: 'free',
+                    start: `ge${new Date().toISOString()}`,
                     _sort: 'start',
                     _count: '50'
                 }
             });
+            console.log(`[Slots] Found ${slotRes.data.entry?.length || 0} slots`);
             const slots = (slotRes.data.entry || []).map((e: { resource: Record<string, unknown> }) => e.resource);
             res.json(slots);
+
+
         } catch (error: unknown) {
             const msg = error instanceof Error ? error.message : 'Unknown error';
             console.error("Get Slots Error:", msg);
@@ -239,19 +260,23 @@ export const GuardianController = {
             if (!slotId || !patientId) return res.status(400).json({ error: "slotId and patientId required" });
 
             // 1. Verify guardian is linked to this patient
+            console.log(`[Booking] Checking relationship for Guardian ${guardianPersonId} and Patient ${patientId}`);
             const rpCheck = await aidboxClient.get('/RelatedPerson', {
                 params: {
                     identifier: `https://hcbs-platform.com/guardian-person-id|${guardianPersonId}`,
                     patient: `Patient/${patientId}`
                 }
             });
+            console.log(`[Booking] RP Check Result: ${JSON.stringify(rpCheck.data)}`);
             if ((rpCheck.data.entry || []).length === 0) {
+                console.warn("[Booking] Guardian not linked to patient");
                 return res.status(403).json({ error: "You are not a guardian for this patient" });
             }
 
             // 2. Check Slot Status
             const slotRes = await aidboxClient.get(`/Slot/${slotId}`);
             const slot = slotRes.data;
+            console.log(`[Booking] Slot Status: ${slot.status}`);
             if (slot.status !== 'free') {
                 return res.status(409).json({ error: "Slot is no longer available" });
             }
@@ -283,6 +308,7 @@ export const GuardianController = {
             }
 
             // 4. Atomic Transaction: Create Appointment + Update Slot
+            console.log(`[Booking] Submitting transaction for Appointment ${appointmentId}`);
             await aidboxClient.post('/', {
                 resourceType: "Bundle",
                 type: "transaction",
@@ -311,7 +337,7 @@ export const GuardianController = {
         } catch (error: any) {
             const msg = error.response?.data || error.message;
             console.error("Book Appointment Error:", msg);
-            res.status(500).json({ error: "Failed to book appointment" });
+            res.status(500).json({ error: `Failed to book appointment: ${JSON.stringify(msg)}` });
         }
     },
 

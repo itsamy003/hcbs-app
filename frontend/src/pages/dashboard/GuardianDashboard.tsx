@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../lib/api';
 import { format } from 'date-fns';
@@ -377,7 +377,8 @@ function BookAppointment({ patientId }: { patientId: string }) {
     });
 
     // Load practitioners when component mounts
-    useState(() => { loadPractitioners(); });
+    // eslint-disable-next-line
+    useEffect(() => { void loadPractitioners(); }, []);
 
     return (
         <div className="bg-teal-50 rounded p-3 space-y-2">
