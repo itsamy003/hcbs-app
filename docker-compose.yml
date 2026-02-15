@@ -56,3 +56,21 @@ services:
       timeout: 5s
       retries: 90
       start_period: 30s
+
+  restate:
+    image: docker.io/restatedev/restate:1.1.2
+    ports:
+      - 9090:9090
+      - 9080:8080 # Ingress (Backend calls this)
+      - 9070:9070 # Admin API (Deployments)
+    environment:
+      RESTATE_LOG_FILTER: restate=info
+    depends_on:
+      - postgres
+
+  jaeger:
+    image: docker.io/jaegertracing/all-in-one:latest
+    ports:
+      - 16686:16686
+      - 4317:4317
+      - 4318:4318

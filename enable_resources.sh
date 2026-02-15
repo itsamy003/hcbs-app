@@ -1,7 +1,7 @@
 #!/bin/bash
 
 BASE_URL="http://localhost:8080"
-AUTH="root:secret"
+AUTH="root:6xJ9RhtVB2"
 CONTENT_TYPE="Content-Type: application/json"
 
 enable_resource() {

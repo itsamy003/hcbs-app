@@ -61,6 +61,9 @@ export default function PatientDashboard() {
                                 <div className="flex justify-between">
                                     <div>
                                         <p className="font-medium text-gray-900">{format(new Date(apt.start), 'PPpp')}</p>
+                                        <p className="text-sm text-gray-700">
+                                            {apt.practitionerName} ({apt.practitionerSpecialty})
+                                        </p>
                                         <p className="text-sm text-gray-500">{apt.reasonCode?.[0]?.text || 'No reason specified'}</p>
                                     </div>
                                     <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">

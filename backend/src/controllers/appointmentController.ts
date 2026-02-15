@@ -58,33 +58,133 @@ export const AppointmentController = {
     },
 
     async getAppointments(req: Request, res: Response) {
+        let params: any = { _sort: '-date' };
         try {
             const user = req.user!;
-            let params: any = { _sort: '-date' };
 
             if (user.role === 'practitioner') {
                 params['actor'] = `Practitioner/${user.fhirResourceId}`;
-            } else if (user.role === 'patient') {
-                params['actor'] = `Patient/${user.fhirResourceId}`;
-            } else if (user.role === 'guardian') {
-                // Find *all* patients for this guardian?
-                // Or filter by specific patient if query param provided.
-                // For now, simpler: user must provide patientId query param or we find all.
-                // Finding all requires knowing all patient IDs.
-                // Let's just return empty for guardian unless they filter by patient.
+                params['_include'] = 'Appointment:patient';
                 if (req.query.patientId) {
-                    params['actor'] = `Patient/${req.query.patientId}`;
-                } else {
-                    // TODO: Lookup all patients for guardian
+                    params['patient'] = `Patient/${req.query.patientId}`;
                 }
+
+                // Fetch Appointments
+                const aptResponse = await aidboxClient.get('/Appointment', { params });
+                const entries = aptResponse.data.entry || [];
+
+                // Map patient names from included resources
+                const patientsById = new Map();
+                entries.forEach((e: any) => {
+                    if (e.resource.resourceType === 'Patient') {
+                        patientsById.set(e.resource.id, e.resource);
+                    }
+                });
+
+                const appointments = entries
+                    .filter((e: any) => e.resource.resourceType === 'Appointment')
+                    .map((e: any) => {
+                        const apt = e.resource;
+                        const patientRef = apt.participant?.find((p: any) => p.actor?.reference?.startsWith('Patient/'))?.actor?.reference;
+                        const patientId = patientRef?.split('/')[1];
+                        const patient = patientsById.get(patientId);
+
+                        let patientName = 'Patient';
+                        if (patient && patient.name?.[0]) {
+                            const given = patient.name[0].given?.join(' ') || '';
+                            const family = patient.name[0].family || '';
+                            patientName = `${given} ${family}`.trim() || 'Patient';
+                        }
+
+                        return {
+                            id: apt.id,
+                            start: apt.start,
+                            end: apt.end,
+                            status: apt.status,
+                            patientName
+                        };
+                    });
+
+                // Fetch SLOTS (availability) - Only if not filtering by a specific patient
+                let slots: any[] = [];
+                if (!req.query.patientId) {
+                    const scheduleResponse = await aidboxClient.get('/Schedule', {
+                        params: { actor: `Practitioner/${user.fhirResourceId}`, _elements: 'id' }
+                    });
+                    const scheduleIds = (scheduleResponse.data.entry || []).map((e: any) => e.resource.id);
+
+                    if (scheduleIds.length > 0) {
+                        const slotResponse = await aidboxClient.get('/Slot', {
+                            params: {
+                                status: 'free',
+                                schedule: scheduleIds.join(','),
+                                _sort: 'start'
+                            }
+                        });
+                        slots = (slotResponse.data.entry || []).map((e: any) => ({
+                            id: e.resource.id,
+                            start: e.resource.start,
+                            end: e.resource.end,
+                            status: 'available'
+                        }));
+                    }
+                }
+
+                // Combine and return
+                return res.json([...appointments, ...slots]);
             }
 
+            // Fallback for other roles (simplified for now)
+            if (user.role === 'patient') {
+                params['actor'] = `Patient/${user.fhirResourceId}`;
+            } else if (user.role === 'guardian') {
+                if (req.query.patientId) {
+                    params['patient'] = `Patient/${req.query.patientId}`;
+                }
+            }
+            params['_include'] = 'Appointment:practitioner';
+
             const response = await aidboxClient.get('/Appointment', { params });
-            res.json(response.data.entry?.map((e: any) => e.resource) || []);
+            const entries = response.data.entry || [];
+
+            // Map practitioners from includes
+            const practitionersById = new Map();
+            entries.forEach((e: any) => {
+                if (e.resource.resourceType === 'Practitioner') {
+                    practitionersById.set(e.resource.id, e.resource);
+                }
+            });
+
+            const appointments = entries
+                .filter((e: any) => e.resource.resourceType === 'Appointment')
+                .map((e: any) => {
+                    const apt = e.resource;
+                    const practitionerRef = apt.participant?.find((p: any) => p.actor?.reference?.startsWith('Practitioner/'))?.actor?.reference;
+                    const practitionerId = practitionerRef?.split('/')[1];
+                    const practitioner = practitionersById.get(practitionerId);
+
+                    let practitionerName = 'Practitioner';
+                    let practitionerSpecialty = '';
+                    if (practitioner) {
+                        const given = practitioner.name?.[0]?.given?.join(' ') || '';
+                        const family = practitioner.name?.[0]?.family || '';
+                        practitionerName = `${given} ${family}`.trim() || 'Practitioner';
+                        practitionerSpecialty = practitioner.qualification?.[0]?.code?.text || '';
+                    }
+
+                    return {
+                        ...apt,
+                        practitionerName,
+                        practitionerSpecialty
+                    };
+                });
+
+            res.json(appointments);
 
         } catch (error: any) {
-            console.error("Get Appointments Error:", error.message);
-            res.status(500).json({ error: "Failed to fetch appointments" });
+            const detail = error.response?.data || error.message;
+            console.error("Get Appointments Error:", JSON.stringify(detail, null, 2));
+            res.status(500).json({ error: "Failed to fetch appointments", detail });
         }
     }
 };

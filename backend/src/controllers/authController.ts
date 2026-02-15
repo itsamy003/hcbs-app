@@ -9,6 +9,7 @@ const signupSchema = z.object({
     firstName: z.string(),
     lastName: z.string(),
     dob: z.string().optional(), // Required for patient
+    specialty: z.string().optional(), // For practitioner
 });
 
 export const AuthController = {

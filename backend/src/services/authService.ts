@@ -4,7 +4,7 @@ import { config } from '../config/env';
 import { v4 as uuidv4 } from 'uuid';
 
 export const AuthService = {
-    async signupPractitioner(data: { email: string; password: string; firstName: string; lastName: string }) {
+    async signupPractitioner(data: { email: string; password: string; firstName: string; lastName: string; specialty?: string }) {
         // 1. Create Practitioner
         const practitionerId = uuidv4();
         await aidboxClient.put(`/Practitioner/${practitionerId}`, {
@@ -12,6 +12,9 @@ export const AuthService = {
             id: practitionerId,
             name: [{ given: [data.firstName], family: data.lastName }],
             telecom: [{ system: 'email', value: data.email }],
+            qualification: data.specialty ? [{
+                code: { text: data.specialty }
+            }] : undefined,
         });
 
         // 2. Create User
@@ -121,7 +124,7 @@ export const AuthService = {
             const axios = require('axios');
 
             await axios.post(`${authBaseUrl}/auth/token`,
-                `grant_type=password&client_id=${config.aidbox.clientId}&client_secret=${config.aidbox.clientSecret}&username=${user.id}&password=${encodeURIComponent(password)}`,
+                `grant_type=password&client_id=hcbs-backend&client_secret=hcbs-backend-secret&username=${user.id}&password=${encodeURIComponent(password)}`,
                 {
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded'

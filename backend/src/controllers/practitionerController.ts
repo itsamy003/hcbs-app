@@ -19,7 +19,7 @@ export const PractitionerController = {
                 resourceType: "Schedule",
                 id: scheduleId,
                 actor: [{ reference: `Practitioner/${practitionerId}` }],
-                planningHorizon: { start: start, end: end },
+                planningHorizon: { start: startTime.toISOString(), end: endTime.toISOString() },
                 comment: "Availability posted by practitioner"
             });
 
@@ -59,8 +59,9 @@ export const PractitionerController = {
             res.status(201).json({ message: "Availability set", slotsCreated: slots.length });
 
         } catch (error: any) {
-            console.error("Set Availability Error:", error.message);
-            res.status(500).json({ error: "Failed to set availability" });
+            const detail = error.response?.data || error.message;
+            console.error("Set Availability Error:", JSON.stringify(detail, null, 2));
+            res.status(500).json({ error: "Failed to set availability", detail });
         }
     },
 
