@@ -23,7 +23,7 @@ interface Appointment {
     id: string;
     start: string;
     end?: string;
-    status: 'booked' | 'available';
+    status: 'booked' | 'available' | 'pto';
     patientName?: string;
 }
 
@@ -40,6 +40,7 @@ export default function PractitionerDashboard() {
     // Calendar controlled state
     const [calendarView, setCalendarView] = useState<View>(Views.WEEK as View);
     const [calendarDate, setCalendarDate] = useState<Date>(new Date());
+    const [activeTab, setActiveTab] = useState<'availability' | 'pto'>('availability');
 
     // Fetch Appointments
     const { data: appointments, refetch: refetchAppointments } = useQuery<Appointment[]>({
@@ -50,15 +51,43 @@ export default function PractitionerDashboard() {
         }
     });
 
+    // Merge contiguous 'available' slots for display
+    const mergeSlots = (appointments: Appointment[]) => {
+        if (!appointments || appointments.length === 0) return [];
+
+        // Sort by start time
+        const sorted = [...appointments].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+        const merged: Appointment[] = [];
+        let current = sorted[0];
+
+        for (let i = 1; i < sorted.length; i++) {
+            const next = sorted[i];
+            const currentEnd = new Date(current.end || new Date(new Date(current.start).getTime() + 30 * 60000));
+            const nextStart = new Date(next.start);
+            const isContiguous = currentEnd.getTime() === nextStart.getTime();
+
+            // Only merge 'available' slots. Keep 'booked' and 'pto' separate.
+            if (current.status === 'available' && next.status === 'available' && isContiguous) {
+                current = { ...current, end: next.end };
+            } else {
+                merged.push(current);
+                current = next;
+            }
+        }
+        merged.push(current);
+        return merged;
+    };
+
+    const mergedAppointments = mergeSlots(appointments || []);
+
     // Map appointments to BigCalendar format
-    const events = appointments?.map(apt => ({
-        title: apt.status === 'booked'
-            ? (apt.patientName || 'Patient')
-            : 'Available',
+    const events = mergedAppointments.map(apt => ({
+        title: apt.status === 'booked' ? (apt.patientName || 'Patient') :
+            apt.status === 'pto' ? 'PTO (Time Off)' : 'Available',
         start: new Date(apt.start),
         end: new Date(apt.end || new Date(new Date(apt.start).getTime() + 30 * 60000)),
         resource: apt
-    })) || [];
+    }));
 
     // Custom Event component
     const EventComponent = ({ event }: { event: { title: string, resource: Appointment } }) => {
@@ -82,9 +111,15 @@ export default function PractitionerDashboard() {
     // Color-code events
     const eventPropGetter = useCallback((event: { resource: Appointment }) => {
         const isBooked = event.resource.status === 'booked';
+        const isPto = event.resource.status === 'pto';
+
+        let backgroundColor = '#10b981'; // emerald-500 (Available)
+        if (isBooked) backgroundColor = '#6366f1'; // indigo-500 (Booked)
+        if (isPto) backgroundColor = '#db2777'; // pink-600 (PTO)
+
         return {
             style: {
-                backgroundColor: isBooked ? '#6366f1' : '#10b981', // indigo-500 for booked, emerald-500 for free
+                backgroundColor,
                 borderRadius: '8px',
                 border: 'none',
                 color: '#fff',
@@ -100,7 +135,8 @@ export default function PractitionerDashboard() {
             return api.post('/practitioner/availability', {
                 start: format(startDateTime, "yyyy-MM-dd'T'HH:mm:ss"),
                 end: format(endDateTime, "yyyy-MM-dd'T'HH:mm:ss"),
-                durationMinutes: duration
+                durationMinutes: duration,
+                status: activeTab === 'pto' ? 'busy' : 'free'
             });
         },
         onSuccess: () => {
@@ -158,6 +194,22 @@ export default function PractitionerDashboard() {
                             </div>
                         </div>
 
+                        {/* Tabs */}
+                        <div className="flex border-b border-gray-100">
+                            <button
+                                onClick={() => setActiveTab('availability')}
+                                className={`flex-1 py-3 text-sm font-medium transition-colors ${activeTab === 'availability' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50/50' : 'text-gray-500 hover:text-gray-700'}`}
+                            >
+                                General Availability
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('pto')}
+                                className={`flex-1 py-3 text-sm font-medium transition-colors ${activeTab === 'pto' ? 'text-pink-600 border-b-2 border-pink-600 bg-pink-50/50' : 'text-gray-500 hover:text-gray-700'}`}
+                            >
+                                PTO / Time Off
+                            </button>
+                        </div>
+
                         <div className="p-6 space-y-5">
                             {/* Start DateTime */}
                             <div>
@@ -189,26 +241,28 @@ export default function PractitionerDashboard() {
                                 />
                             </div>
 
-                            {/* Slot Duration */}
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 mb-1.5">Slot Duration</label>
-                                <div className="relative">
-                                    <Clock className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-                                    <select
-                                        value={duration}
-                                        onChange={(e) => setDuration(Number(e.target.value))}
-                                        className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 text-sm transition-all appearance-none cursor-pointer"
-                                    >
-                                        <option value={15}>15 Minutes</option>
-                                        <option value={30}>30 Minutes</option>
-                                        <option value={45}>45 Minutes</option>
-                                        <option value={60}>1 Hour</option>
-                                    </select>
+                            {/* Slot Duration - Only for Availability */}
+                            {activeTab === 'availability' && (
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-1.5">Slot Duration</label>
+                                    <div className="relative">
+                                        <Clock className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                                        <select
+                                            value={duration}
+                                            onChange={(e) => setDuration(Number(e.target.value))}
+                                            className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 text-sm transition-all appearance-none cursor-pointer"
+                                        >
+                                            <option value={15}>15 Minutes</option>
+                                            <option value={30}>30 Minutes</option>
+                                            <option value={45}>45 Minutes</option>
+                                            <option value={60}>1 Hour</option>
+                                        </select>
+                                    </div>
                                 </div>
-                            </div>
+                            )}
 
                             {/* Slot Preview */}
-                            {slotCount > 0 && (
+                            {activeTab === 'availability' && slotCount > 0 && (
                                 <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 flex items-center gap-2">
                                     <ChevronRight className="h-4 w-4 text-indigo-500" />
                                     <span className="text-sm text-indigo-700 font-medium">
@@ -217,18 +271,28 @@ export default function PractitionerDashboard() {
                                 </div>
                             )}
 
+                            {/* PTO Message */}
+                            {activeTab === 'pto' && (
+                                <div className="bg-pink-50 border border-pink-100 rounded-xl p-3 text-sm text-pink-700">
+                                    This will block out the selected time range as <strong>PTO</strong>.
+                                </div>
+                            )}
+
                             {/* Publish Button */}
                             <button
                                 onClick={() => mutation.mutate()}
-                                disabled={mutation.isPending || slotCount === 0}
-                                className="w-full py-3 bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 hover:from-indigo-700 hover:to-indigo-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                                disabled={mutation.isPending || (activeTab === 'availability' && slotCount === 0)}
+                                className={`w-full py-3 text-white rounded-xl font-bold shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm ${activeTab === 'pto'
+                                        ? 'bg-gradient-to-r from-pink-500 to-rose-600 shadow-pink-200 hover:from-pink-600 hover:to-rose-700'
+                                        : 'bg-gradient-to-r from-indigo-600 to-indigo-700 shadow-indigo-200 hover:from-indigo-700 hover:to-indigo-800'
+                                    }`}
                             >
                                 {mutation.isPending ? (
                                     <span className="flex items-center justify-center gap-2">
                                         <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
-                                        Publishing...
+                                        Processing...
                                     </span>
-                                ) : `Publish ${slotCount} Slot${slotCount !== 1 ? 's' : ''}`}
+                                ) : activeTab === 'pto' ? 'Schedule PTO' : `Publish ${slotCount} Slot${slotCount !== 1 ? 's' : ''}`}
                             </button>
                         </div>
                     </div>

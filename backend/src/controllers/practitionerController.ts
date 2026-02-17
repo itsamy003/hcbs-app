@@ -8,7 +8,7 @@ export const PractitionerController = {
             const practitionerId = req.user?.fhirResourceId;
             if (!practitionerId) return res.status(400).json({ error: "User not linked to a Practitioner" });
 
-            const { start, end, durationMinutes } = req.body;
+            const { start, end, durationMinutes, status = 'free' } = req.body;
             const startTime = new Date(start);
             const endTime = new Date(end);
 
@@ -20,27 +20,42 @@ export const PractitionerController = {
                 id: scheduleId,
                 actor: [{ reference: `Practitioner/${practitionerId}` }],
                 planningHorizon: { start: startTime.toISOString(), end: endTime.toISOString() },
-                comment: "Availability posted by practitioner"
+                comment: status === 'busy' ? "PTO/Time Off" : "Availability posted by practitioner"
             });
 
             // 2. Generate Slots
             const slots = [];
-            let current = new Date(startTime);
-            while (current < endTime) {
-                const slotEnd = new Date(current.getTime() + durationMinutes * 60000);
-                if (slotEnd > endTime) break;
 
+            if (status === 'busy') {
+                // For PTO, create a single busy slot for the entire range
                 const slotId = uuidv4();
                 slots.push({
                     resourceType: "Slot",
                     id: slotId,
                     schedule: { reference: `Schedule/${scheduleId}` },
-                    status: "free",
-                    start: current.toISOString(),
-                    end: slotEnd.toISOString()
+                    status: "busy",
+                    start: startTime.toISOString(),
+                    end: endTime.toISOString(),
+                    comment: "PTO"
                 });
+            } else {
+                let current = new Date(startTime);
+                while (current < endTime) {
+                    const slotEnd = new Date(current.getTime() + durationMinutes * 60000);
+                    if (slotEnd > endTime) break;
 
-                current = slotEnd;
+                    const slotId = uuidv4();
+                    slots.push({
+                        resourceType: "Slot",
+                        id: slotId,
+                        schedule: { reference: `Schedule/${scheduleId}` },
+                        status: "free",
+                        start: current.toISOString(),
+                        end: slotEnd.toISOString()
+                    });
+
+                    current = slotEnd;
+                }
             }
 
             // Batch create slots
@@ -56,7 +71,7 @@ export const PractitionerController = {
 
             await aidboxClient.post('/', bundle);
 
-            res.status(201).json({ message: "Availability set", slotsCreated: slots.length });
+            res.status(201).json({ message: "Availability/PTO set", slotsCreated: slots.length });
 
         } catch (error: any) {
             const detail = error.response?.data || error.message;

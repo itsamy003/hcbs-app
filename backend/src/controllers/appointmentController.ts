@@ -116,17 +116,19 @@ export const AppointmentController = {
                     if (scheduleIds.length > 0) {
                         const slotResponse = await aidboxClient.get('/Slot', {
                             params: {
-                                status: 'free',
                                 schedule: scheduleIds.join(','),
                                 _sort: 'start'
                             }
                         });
-                        slots = (slotResponse.data.entry || []).map((e: any) => ({
-                            id: e.resource.id,
-                            start: e.resource.start,
-                            end: e.resource.end,
-                            status: 'available'
-                        }));
+                        slots = (slotResponse.data.entry || [])
+                            .map((e: any) => e.resource)
+                            .filter((slot: any) => slot.status === 'free' || (slot.status === 'busy' && slot.comment === 'PTO'))
+                            .map((slot: any) => ({
+                                id: slot.id,
+                                start: slot.start,
+                                end: slot.end,
+                                status: slot.status === 'busy' ? 'pto' : 'available'
+                            }));
                     }
                 }
 

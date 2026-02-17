@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList, Alert, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../api/api';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Calendar, Clock, Users, ChevronRight, CheckCircle } from 'lucide-react-native';
+import { Calendar, Clock } from 'lucide-react-native';
 import { format } from 'date-fns';
 
 export default function PractitionerScreen() {
+    const [activeTab, setActiveTab] = useState<'availability' | 'pto'>('availability');
     const [startOpen, setStartOpen] = useState(false);
     const [endOpen, setEndOpen] = useState(false);
     const [startDate, setStartDate] = useState(new Date());
@@ -28,7 +29,8 @@ export default function PractitionerScreen() {
             return api.post('/practitioner/availability', {
                 start: format(startDate, "yyyy-MM-dd'T'HH:mm:ss"),
                 end: format(endDate, "yyyy-MM-dd'T'HH:mm:ss"),
-                durationMinutes: duration
+                durationMinutes: duration,
+                status: activeTab === 'pto' ? 'busy' : 'free'
             });
         },
         onSuccess: () => {
@@ -40,13 +42,43 @@ export default function PractitionerScreen() {
         }
     });
 
+
+    const groupAppointments = (items: any[]) => {
+        if (!items || items.length === 0) return [];
+        const sorted = [...items].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+        const merged: any[] = [];
+        let current = sorted[0];
+
+        for (let i = 1; i < sorted.length; i++) {
+            const next = sorted[i];
+            const isContiguous = new Date(current.end).getTime() === new Date(next.start).getTime();
+
+            if (current.status === 'available' && next.status === 'available' && isContiguous) {
+                // Merge
+                current = { ...current, end: next.end };
+            } else {
+                merged.push(current);
+                current = next;
+            }
+        }
+        merged.push(current);
+        return merged;
+    };
+
+    const groupedAppointments = groupAppointments(appointments || []);
+
     const renderAppointment = ({ item }: { item: any }) => (
-        <View style={styles.card}>
+        <View style={[styles.card, item.status === 'pto' && styles.cardPto]}>
             <View style={styles.cardHeader}>
                 <Text style={styles.cardTitle}>
-                    {item.status === 'booked' ? (item.patientName || 'Patient') : 'Available'}
+                    {item.status === 'booked' ? (item.patientName || 'Patient') :
+                        item.status === 'pto' ? 'Personal Time Off' : 'Available'}
                 </Text>
-                <View style={[styles.badge, item.status === 'booked' ? styles.badgeBooked : styles.badgeFree]}>
+                <View style={[
+                    styles.badge,
+                    item.status === 'booked' ? styles.badgeBooked :
+                        item.status === 'pto' ? styles.badgePto : styles.badgeFree
+                ]}>
                     <Text style={styles.badgeText}>{item.status}</Text>
                 </View>
             </View>
@@ -66,7 +98,30 @@ export default function PractitionerScreen() {
 
             {/* Set Availability Section */}
             <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Set Availability</Text>
+                <Text style={styles.sectionTitle}>Manage Schedule</Text>
+
+                {/* Tabs */}
+                <View style={styles.tabsContainer}>
+                    <TouchableOpacity
+                        style={[styles.tab, activeTab === 'availability' && styles.activeTab]}
+                        onPress={() => setActiveTab('availability')}
+                    >
+                        <Text style={[styles.tabText, activeTab === 'availability' && styles.activeTabText]}>General Availability</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.tab, activeTab === 'pto' && styles.activeTab]}
+                        onPress={() => setActiveTab('pto')}
+                    >
+                        <Text style={[styles.tabText, activeTab === 'pto' && styles.activeTabText]}>PTO / Time Off</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {activeTab === 'availability' && (
+                    <Text style={styles.helperText}>Set your working hours. The system will create slots automatically.</Text>
+                )}
+                {activeTab === 'pto' && (
+                    <Text style={styles.helperText}>Block out time for personal time off.</Text>
+                )}
 
                 <TouchableOpacity style={styles.input} onPress={() => setStartOpen(true)}>
                     <Calendar color="#6b7280" size={20} />
@@ -100,13 +155,24 @@ export default function PractitionerScreen() {
                     />
                 )}
 
+                {activeTab === 'availability' && (
+                    <View style={styles.input}>
+                        <Clock color="#6b7280" size={20} />
+                        <Text style={styles.inputText}>Slot Duration: {duration} mins</Text>
+                        {/* Simple toggle for demo, real app would use picker or input */}
+                        <TouchableOpacity onPress={() => setDuration(duration === 30 ? 60 : 30)} style={{ marginLeft: 'auto' }}>
+                            <Text style={{ color: '#4f46e5', fontWeight: 'bold' }}>Change</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
                 <TouchableOpacity
-                    style={styles.publishButton}
+                    style={[styles.publishButton, activeTab === 'pto' && styles.ptoButton]}
                     onPress={() => mutation.mutate()}
                     disabled={mutation.isPending}
                 >
                     <Text style={styles.publishButtonText}>
-                        {mutation.isPending ? 'Publishing...' : 'Publish Availability'}
+                        {mutation.isPending ? 'Processing...' : activeTab === 'availability' ? 'Publish Availability' : 'Schedule PTO'}
                     </Text>
                 </TouchableOpacity>
             </View>
@@ -114,11 +180,11 @@ export default function PractitionerScreen() {
             {/* Appointments List */}
             <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Upcoming Schedule</Text>
-                {appointments?.length === 0 ? (
+                {groupedAppointments.length === 0 ? (
                     <Text style={styles.emptyText}>No appointments scheduled.</Text>
                 ) : (
-                    (appointments || []).map((item: any) => (
-                        <React.Fragment key={item.id}>
+                    groupedAppointments.map((item: any, index: number) => (
+                        <React.Fragment key={index}>
                             {renderAppointment({ item })}
                         </React.Fragment>
                     ))
@@ -228,5 +294,51 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         color: '#6b7280',
         marginTop: 20,
+    },
+    tabsContainer: {
+        flexDirection: 'row',
+        marginBottom: 16,
+        backgroundColor: '#e5e7eb',
+        borderRadius: 8,
+        padding: 4,
+    },
+    tab: {
+        flex: 1,
+        paddingVertical: 8,
+        alignItems: 'center',
+        borderRadius: 6,
+    },
+    activeTab: {
+        backgroundColor: '#fff',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 1,
+        elevation: 1,
+    },
+    tabText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#6b7280',
+    },
+    activeTabText: {
+        color: '#4f46e5',
+        fontWeight: 'bold',
+    },
+    helperText: {
+        fontSize: 14,
+        color: '#6b7280',
+        marginBottom: 12,
+        fontStyle: 'italic',
+    },
+    ptoButton: {
+        backgroundColor: '#db2777', // Pink for PTO
+    },
+    cardPto: {
+        borderLeftColor: '#db2777',
+        backgroundColor: '#fff1f2',
+    },
+    badgePto: {
+        backgroundColor: '#fce7f3',
     },
 });
